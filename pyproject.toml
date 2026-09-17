@@ -1,0 +1,39 @@
+[project]
+name = "cashcli"
+version = "0.1.0"
+description = "Local personal-budget calculator (incomes, expenses, amortizing debts) with a JSON CLI designed for LLM agents."
+readme = "README.md"
+authors = [
+    { name = "Adam Train", email = "adam@adametrain.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "python-dateutil>=2.9.0.post0",
+]
+
+[project.scripts]
+cash = "cashcli.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.12.15,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.16.8",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/cashcli/migrations.py" = ["E501"]
+"tests/*" = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
