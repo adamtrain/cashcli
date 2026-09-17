@@ -85,7 +85,7 @@ class SpareCalculator:
         self.ledger = ext.ledger
         self.horizon = ext.until
 
-    def compute(self, day: date, balance_cents: int) -> dict:
+    def _committed(self, day: date):
         nxt = next((e for e in self.ledger if e.date > day and e.delta_cents > 0), None)
         cutoff = nxt.date if nxt else None
         committed = [
@@ -93,6 +93,15 @@ class SpareCalculator:
             for e in self.ledger
             if e.date > day and e.delta_cents < 0 and (cutoff is None or e.date < cutoff)
         ]
+        return nxt, committed
+
+    def spare_cents(self, day: date, balance_cents: int) -> int:
+        """Spare balance in cents (no income ahead: every later expense in the horizon counts)."""
+        _, committed = self._committed(day)
+        return balance_cents - sum(-e.delta_cents for e in committed)
+
+    def compute(self, day: date, balance_cents: int) -> dict:
+        nxt, committed = self._committed(day)
         total = sum(-e.delta_cents for e in committed)
         lifestyle = sum(-e.delta_cents for e in committed if e.kind == "lifestyle")
         committed = [e for e in committed if e.kind != "lifestyle"]

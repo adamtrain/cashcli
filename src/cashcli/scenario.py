@@ -5,9 +5,11 @@ A scenario is never persisted. It is echoed back in query output so results are 
 
 from __future__ import annotations
 
+import copy
 import json
+import re
 import sys
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -35,11 +37,73 @@ _KNOWN_KEYS = {
     "name",
     "disable",
     "enable",
+    "end",
     "amount_changes",
     "add_flows",
     "debt_events",
     "weekly_spend",
 }
+
+# ---- the `?` date placeholder (resolved by `cash earliest`, or `--on DATE`) ------------------
+
+PLACEHOLDER = "?"
+_PLACEHOLDER_RE = re.compile(r"^\?(?:([+-])(\d+))?$")
+_DATE_KEYS = {"on", "date", "from", "until", "after", "dtstart"}
+
+
+def _placeholder_offset(value) -> int | None:
+    """Days offset for '?', '?+N', '?-N'; None when the value is not a placeholder."""
+    if not isinstance(value, str):
+        return None
+    m = _PLACEHOLDER_RE.match(value.strip())
+    if not m:
+        return None
+    sign, n = m.group(1), m.group(2)
+    return 0 if n is None else (int(n) if sign == "+" else -int(n))
+
+
+def has_placeholder(scenario: dict | None) -> bool:
+    """True when any date field in the scenario is '?' (optionally with a +N/-N day offset)."""
+    return scenario is not None and any(
+        _placeholder_offset(v) is not None for _, v in _walk_dates(scenario)
+    )
+
+
+def resolve_placeholders(scenario: dict | None, day: date) -> dict | None:
+    """Copy of the scenario with every '?' date field replaced by `day` (+/- its offset)."""
+    if scenario is None:
+        return None
+    out = copy.deepcopy(scenario)
+    for holder, key in _walk_dates(out, with_holders=True):
+        off = _placeholder_offset(holder[key])
+        if off is not None:
+            holder[key] = (day + timedelta(days=off)).isoformat()
+    return out
+
+
+def placeholder_dates(scenario: dict | None, day: date) -> set[date]:
+    """The concrete dates every '?' field resolves to for `day`."""
+    if scenario is None:
+        return set()
+    out = set()
+    for _, v in _walk_dates(scenario):
+        off = _placeholder_offset(v)
+        if off is not None:
+            out.add(day + timedelta(days=off))
+    return out
+
+
+def _walk_dates(node, with_holders: bool = False, key=None):
+    """Yield (key, value) — or (holder, key) — for every date-like field in the scenario."""
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k in _DATE_KEYS and isinstance(v, str):
+                yield (node, k) if with_holders else (k, v)
+            elif isinstance(v, dict | list):
+                yield from _walk_dates(v, with_holders, k)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _walk_dates(item, with_holders, key)
 
 
 def load_scenario(source: str | None, inline: str | None) -> dict | None:
@@ -188,6 +252,34 @@ def build_effective_model(
             f"disabled {len(hit)} flow(s) via tag {t!r}: " + ", ".join(f.name for f in hit)
         )
 
+    # end: a flow (or every flow with a tag) has no occurrences after a date
+    ends: dict[int, date] = {}
+    for item in _as_list(scenario.get("end"), "end"):
+        if (
+            not isinstance(item, dict)
+            or "after" not in item
+            or not (("flow" in item) ^ ("tag" in item))
+        ):
+            raise CashError(
+                "scenario.end entries need 'after' and exactly one of 'flow' or 'tag'",
+                "invalid_scenario",
+            )
+        after = parse_date(item["after"])
+        if "flow" in item:
+            hit = [resolve(item["flow"], "end")]
+        else:
+            t = normalize_tag(str(item["tag"]))
+            hit = [f for f in all_flows if t in {x.lower() for x in f.tags} and active[int(f.id)]]
+            if not hit:
+                model.warnings.append(f"scenario: end tag {t!r} matched no active flow")
+                continue
+        for f in hit:
+            fid = int(f.id)
+            ends[fid] = min(ends[fid], after) if fid in ends else after
+        model.applied.append(
+            f"ended {len(hit)} flow(s) after {after.isoformat()}: " + ", ".join(f.name for f in hit)
+        )
+
     # amount changes -> segments
     segments: dict[int, list[AmountSegment]] = {}
     for ch in _as_list(scenario.get("amount_changes"), "amount_changes"):
@@ -228,24 +320,35 @@ def build_effective_model(
         extra_events.setdefault(int(f.id), []).append(_event_from_json(int(f.id), ev))
         model.applied.append(f"debt event on {f.name!r}: {ev['type']} on {ev['date']}")
 
-    # A disabled debt flow that carries a payoff event stays in the model: it keeps paying until
-    # the payoff, then stops. Without a payoff, disabling simply removes debt + payments (warn).
+    # A disabled debt flow that carries a payoff/settle event stays in the model: it keeps paying
+    # until that event, then stops. Without one, disabling simply removes debt + payments (warn).
+    _closing = (EventType.PAYOFF, EventType.SETTLE)
     for f in all_flows:
-        if f.debt is None or active[int(f.id)] or not f.active:
+        if f.debt is None:
             continue
-        has_payoff = any(
-            e.type == EventType.PAYOFF for e in extra_events.get(int(f.id), [])
-        ) or any(e.type == EventType.PAYOFF for e in f.debt.events)
-        if has_payoff:
-            active[int(f.id)] = True
-            model.applied.append(
-                f"kept debt flow {f.name!r} despite disable: it has a payoff event, so payments "
-                "continue until the payoff and stop afterwards"
-            )
-        else:
+        closes = [
+            e
+            for e in list(extra_events.get(int(f.id), [])) + list(f.debt.events)
+            if e.type in _closing
+        ]
+        if not active[int(f.id)] and f.active:
+            if closes:
+                active[int(f.id)] = True
+                model.applied.append(
+                    f"kept debt flow {f.name!r} despite disable: it has a {closes[0].type} event, "
+                    "so payments continue until then and stop afterwards"
+                )
+            else:
+                model.warnings.append(
+                    f"scenario disables debt flow {f.name!r} without a payoff/settle event; the "
+                    "debt and its payments simply vanish from the projection (no payoff cost "
+                    "modelled)"
+                )
+        if int(f.id) in ends and not any(e.date <= ends[int(f.id)] for e in closes):
             model.warnings.append(
-                f"scenario disables debt flow {f.name!r} without a payoff event; the debt and its "
-                "payments simply vanish from the projection (no payoff cost modelled)"
+                f"scenario ends debt flow {f.name!r} after {ends[int(f.id)]} without a "
+                "payoff/settle by then; its payments stop but the balance stays and keeps "
+                "accruing interest"
             )
 
     for f in all_flows:
@@ -256,6 +359,9 @@ def build_effective_model(
             debt = Debt(
                 **{**debt.__dict__, "events": tuple(list(debt.events) + extra_events[int(f.id)])}
             )
+        until = f.until
+        if int(f.id) in ends:
+            until = min(until, ends[int(f.id)]) if until else ends[int(f.id)]
         model.flows.append(
             EffectiveFlow(
                 key=f.id,
@@ -264,7 +370,7 @@ def build_effective_model(
                 tags=frozenset(f.tags),
                 rrule=f.rrule,
                 dtstart=f.dtstart,
-                until=f.until,
+                until=until,
                 base_cents=f.amount_cents,
                 segments=tuple(segments.get(int(f.id), [])),
                 debt=debt,
@@ -372,4 +478,13 @@ def describe(scenario: dict | None) -> dict | None:
     return {"name": scenario.get("name"), "spec": scenario}
 
 
-__all__ = ["Decimal", "build_effective_model", "describe", "load_scenario"]
+__all__ = [
+    "PLACEHOLDER",
+    "Decimal",
+    "build_effective_model",
+    "describe",
+    "has_placeholder",
+    "load_scenario",
+    "placeholder_dates",
+    "resolve_placeholders",
+]

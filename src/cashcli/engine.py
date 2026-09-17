@@ -19,7 +19,7 @@ from cashcli.recurrence import occurrences
 P_PARAM = 0  # rate_change / balance_adjustment / payment_change
 P_INCOME = 2
 P_DEBT_PAYMENT = 3
-P_EXTRA = 4  # extra_payment / payoff
+P_EXTRA = 4  # extra_payment / payoff / settle
 P_EXPENSE = 5
 LIFESTYLE_KEY = "lifestyle"
 
@@ -36,7 +36,7 @@ class LedgerEntry:
     date: date
     key: FlowKey
     name: str
-    kind: str  # income | expense | debt_payment | extra_payment | payoff
+    kind: str  # income | expense | debt_payment | extra_payment | payoff | settle | lifestyle
     amount_cents: int
     delta_cents: int
     balance_after_cents: int
@@ -69,7 +69,7 @@ class DebtRow:
     interest_cents: int
     principal_cents: int
     balance_after: Decimal
-    kind: str  # scheduled | extra | payoff
+    kind: str  # scheduled | extra | payoff | settle
     before_as_of: bool
     interest_exact: Decimal = Decimal(0)
 
@@ -211,7 +211,7 @@ def run(
                 if ev.date < sim_start or ev.date > until:
                     continue
                 seq += 1
-                if ev.type in (EventType.EXTRA_PAYMENT, EventType.PAYOFF):
+                if ev.type in (EventType.EXTRA_PAYMENT, EventType.PAYOFF, EventType.SETTLE):
                     events.append(_Event(ev.date, P_EXTRA, seq, str(ev.type), f, ev))
                 else:
                     events.append(_Event(ev.date, P_PARAM, seq, str(ev.type), f, ev))
@@ -349,7 +349,7 @@ def run(
                         -res.cash_cents,
                         DebtSplit(res.interest_cents, res.principal_cents, res.balance_after),
                     )
-            else:  # extra_payment / payoff
+            else:  # extra_payment / payoff / settle
                 st = states[f.key]
                 ev = e.payload
                 if st.is_paid_off:
@@ -360,9 +360,11 @@ def run(
                         f"{st.anchor}; ignored (the stated balance already reflects it)"
                     )
                     continue
-                amt = st.owed_cents() if ev.type == EventType.PAYOFF else ev.amount_cents
+                if ev.type == EventType.EXTRA_PAYMENT:
+                    amt, kind = ev.amount_cents, "extra"
+                else:
+                    amt, kind = st.owed_cents(), str(ev.type)
                 res = st.apply_payment(amt, day)
-                kind = "payoff" if ev.type == EventType.PAYOFF else "extra"
                 rows[f.key].append(
                     DebtRow(
                         len(rows[f.key]) + 1,
@@ -376,20 +378,26 @@ def run(
                         res.interest_exact,
                     )
                 )
-                if in_window:
-                    paid_in_window[f.key][0] += res.interest_cents
-                    paid_in_window[f.key][1] += res.principal_cents
-                    result.interest_paid_cents += res.interest_cents
-                    result.principal_paid_cents += res.principal_cents
-                    ledger(
-                        day,
-                        f.key,
-                        f.name,
-                        "payoff" if kind == "payoff" else "extra_payment",
-                        res.cash_cents,
-                        -res.cash_cents,
-                        DebtSplit(res.interest_cents, res.principal_cents, res.balance_after),
-                    )
+                if not in_window:
+                    continue
+                # settle: proceeds (a sale price) clear part of the debt; only the shortfall is
+                # cash out, and any surplus is cash in.
+                cash = res.cash_cents - (ev.amount_cents if kind == "settle" else 0)
+                interest_c = min(max(cash, 0), res.interest_cents)
+                principal_c = max(cash, 0) - interest_c
+                paid_in_window[f.key][0] += interest_c
+                paid_in_window[f.key][1] += principal_c
+                result.interest_paid_cents += interest_c
+                result.principal_paid_cents += principal_c
+                ledger(
+                    day,
+                    f.key,
+                    f.name,
+                    {"extra": "extra_payment"}.get(kind, kind),
+                    abs(cash),
+                    -cash,
+                    DebtSplit(res.interest_cents, res.principal_cents, res.balance_after),
+                )
 
         if in_window and weekly_spend_cents and day > as_of:
             due = int(

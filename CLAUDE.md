@@ -28,6 +28,10 @@ instead of doing the arithmetic yourself.
 - What-ifs are scenario JSON overlays (`--scenario FILE` / `--scenario-json '{...}'`), never edits to
   the stored budget. Use `breakeven` / `compare` for "should I do X" questions and `project` for
   "how much will I have" questions; `summary --tag T` for "what do I spend on T".
+- "When is the earliest I can do X without dropping below $A?" → `cash earliest --floor A` with the
+  what-if dated `?` (`--settle "Loan:29500@?" --add-expense "Flight:550@?" --stop-tag "car@?"`),
+  then `project --on DATE` with the same flags for the detail. `--settle` = sell the thing and clear
+  its loan with the proceeds; `--stop`/`--stop-tag` = no occurrences after a date.
 - `cash sql "SELECT ..."` is available for ad-hoc read-only questions about the stored data.
 - A debt is an expense flow (the payment) plus a `debt set` record (balance, rate, compounding).
   `--balance` is the balance right after the `--balance-as-of` date's payment.

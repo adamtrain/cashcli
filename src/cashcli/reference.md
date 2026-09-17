@@ -45,8 +45,8 @@ the current one, and reports what it did under `cleanup` (or run `cash cleanup` 
 | one-off | a flow with no `rrule`; it happens once on `dtstart` |
 | weekend rule | per flow: `none` (occurs on the weekend day), `next` (moves to the following Monday, i.e. ACH-pulled), `previous` (moves to the preceding Friday). `--ach` = `--weekend next` |
 | debt | extra record attached to an **expense** flow (the loan payment). Holds balance, rate, compounding, day count, capitalization, payment mode. The flow's amount + rrule is the scheduled payment |
-| debt event | dated change on a debt: `rate_change`, `balance_adjustment` (signed), `extra_payment`, `payment_change`, `payoff` |
-| scenario | ephemeral JSON what-if overlay passed to a query; never stored |
+| debt event | dated change on a debt: `rate_change`, `balance_adjustment` (signed), `extra_payment`, `payment_change`, `payoff`; scenario-only: `settle` (clear the debt with `amount` of proceeds, e.g. a sale price, applied — the shortfall is paid from cash, a surplus is received) |
+| scenario | ephemeral JSON what-if overlay passed to a query; never stored. Any date in it may be the placeholder `?` (`?+N`/`?-N` days), pinned with `--on DATE` or searched for with `cash earliest` |
 | starting balance | cash on hand at as-of. Never stored; always a query parameter |
 | weekly spend | `--weekly-spend A` on project/compare/breakeven: variable lifestyle spending (groceries, incidentals) per week, prorated per day after as-of, exact to the cent over any span. Included in totals, the ledger (kind `lifestyle`) and spare balances. A scenario may override it with `"weekly_spend"` |
 | spare balance | the balance on a date minus every expense that lands after that date and before the next income. **This is the number to report when the user asks "how much will I have on X"**; the raw end-of-day balance is `ending_balance` |
@@ -148,8 +148,10 @@ cash debt schedule FLOW [--as-of D] [--until D | --months N] [--scenario ...] [-
   you get a `negative amortization` warning.
 - Events: `rate_change --rate`, `balance_adjustment --amount` (signed, e.g. `-250`),
   `extra_payment --amount`, `payment_change --amount` (new scheduled payment from that date),
-  `payoff` (pays the full balance that day). Same-day order: parameter events → interest →
-  scheduled payment → extra/payoff.
+  `payoff` (pays the full balance that day), and scenario-only `settle --amount PROCEEDS` (clears
+  the balance; the shortfall over PROCEEDS is paid from cash, a surplus received; `debt events add`
+  rejects it). Same-day order: parameter events → interest → scheduled payment →
+  extra/payoff/settle. Schedule and ledger rows carry `kind` `settle`.
 - `debt schedule` output: `balance_at_as_of`, `payoff_date`, `payments_remaining`,
   `total_paid_remaining`, `total_interest_remaining`, `rows[{n,date,payment,interest,principal,
   balance,kind}]`. `--solve-payment N` adds the level monthly payment that pays off in N months.
@@ -164,6 +166,9 @@ cash compare [--baseline FILE] (--scenario FILE | --scenario-json JSON) [--start
              [--weekly-spend A] [--as-of D] [--until D | --months N] [--granularity ...]
 cash breakeven [--baseline FILE] (--scenario FILE | --scenario-json JSON) [--weekly-spend A]
                [--as-of D] [--until D | --months N]
+cash earliest --floor A [--measure balance|spare] [--starting-balance A] [--weekly-spend A]
+              [--as-of D] [--until D | --months N] [--from D] [--before D] [--step DAYS] [--weekdays]
+              <shortcut flags / scenario with at least one '?' date>
 ```
 - `--as-of` defaults to today; `--months` defaults to 12 (breakeven: 120; schedule: 600).
 - **project** → `weekly_spend`, `lifestyle_total` (what the weekly spend added up to in the window),
@@ -190,21 +195,41 @@ cash breakeven [--baseline FILE] (--scenario FILE | --scenario-json JSON) [--wee
   (with `caveat`, `trend_per_month_since_worst`, `extrapolated_date` when the gap is closing),
   `identical`. `max_shortfall` is the worst point of B relative to A. Differences do not depend on
   the starting balance.
+- **earliest** answers "when is the soonest I can do X without my balance dropping below A?". Date
+  the what-if with `?` (e.g. `--settle "Car loan:29500@?" --add-expense "Flight:550@?"
+  --stop-tag "car@?"`), then every candidate date from `--from` (default as-of) to `--before`
+  (default until) is projected in turn; a date is feasible when the `--measure` (raw end-of-day
+  `balance`, or the stricter `spare` balance) stays at or above `--floor` on every day from that
+  date to the end of the horizon (earlier days are the same whatever the date). Output:
+  `status` (`found` | `none_in_range`), **`date`**, `feasible_through` (the last consecutive
+  feasible candidate after `date`; a warning names the first date that fails again),
+  `result{balance_on_date, spare_on_date, min_after{date,balance,spare}, headroom, ending_balance,
+  spare_balance, placeholder_entries[]}` (the ledger rows the `?` items produced — e.g. the cash a
+  settle actually cost), `last_infeasible{date, min_after, shortfall}` (why the day before fails),
+  `best_infeasible` (closest miss when nothing works), `candidates{checked,...}`. Then run the same
+  flags through `project --on DATE` for the full picture. ~5 ms per candidate.
 
 ## What-if shortcuts (prefer these for one or two tweaks)
 
-`project`, `summary`, `debt schedule`, `compare` and `breakeven` accept repeatable flags that build a
-scenario for you (and merge with `--scenario`/`--scenario-json` if also given):
+`project`, `summary`, `debt schedule`, `compare`, `breakeven` and `earliest` accept repeatable flags
+that build a scenario for you (and merge with `--scenario`/`--scenario-json` if also given):
 
 ```
 --disable FLOW                 --disable-tag TAG             --enable FLOW
+--stop "FLOW@DATE"             --stop-tag "TAG@DATE"         (no occurrences after DATE)
 --payoff "FLOW@DATE"           --extra-payment "FLOW:AMOUNT@DATE"
+--settle "FLOW:PROCEEDS@DATE"  (clear a debt on DATE with PROCEEDS toward it; shortfall paid from cash)
 --set-payment "FLOW:AMOUNT@DATE"                             --rate-change "FLOW:RATE@DATE"
 --add-income "NAME:AMOUNT@DATE"                              --add-expense "NAME:AMOUNT@DATE"
 --set-amount "FLOW:AMOUNT[@FROM]"
 ```
 Amount is taken after the last `:` and date after the last `@`, so names may contain spaces.
 Example: `cash project --starting-balance 3000 --until 2026-11-13 --extra-payment "Mini Cooper:15000@2026-11-13" --select spare_balance,spare`
+
+Any DATE may be `?` (or `?+N` / `?-N` for N days after/before it). `cash earliest` searches for the
+`?` date; every other query needs `--on DATE` to pin it (`cash project --on 2026-12-11 ...`), which
+makes "find the date, then show me that projection" a one-flag change.
+"Sell the car" = `--settle "Car loan:29500@?" --add-expense "Flight:550@?" --stop-tag "car@?"`.
 
 ## Scenario JSON (for anything the shortcuts can't express)
 
@@ -217,6 +242,7 @@ is optional. Flow references accept id or name.
   "weekly_spend": "150",
   "disable": { "flow_ids": [3], "flows": ["Car insurance"], "tags": ["car"] },
   "enable":  { "flows": ["Bus pass"] },
+  "end":     [ { "flow": "Car insurance", "after": "2026-10-15" }, { "tag": "car", "after": "?" } ],
   "amount_changes": [ { "flow": "Rent", "amount": "1650", "from": "2027-01-01", "until": null } ],
   "add_flows": [
     { "name": "Car sale", "kind": "income", "amount": "15000", "on": "2026-10-15", "tags": ["car"] },
@@ -230,6 +256,7 @@ is optional. Flow references accept id or name.
   ],
   "debt_events": [
     { "flow": "Car loan", "type": "payoff", "date": "2026-10-15" },
+    { "flow": "Car loan", "type": "settle", "date": "?", "amount": "29500" },
     { "flow": "Car loan", "type": "extra_payment", "date": "2026-10-15", "amount": "5000" },
     { "flow": "Car loan", "type": "rate_change", "date": "2027-01-01", "rate": "0.05" },
     { "flow": "Car loan", "type": "balance_adjustment", "date": "2027-01-01", "amount": "-250" },
@@ -242,9 +269,15 @@ Rules:
 - `enable` runs before `disable`; disable wins. Unknown flow → error `scenario_unknown_flow`;
   a tag matching nothing → warning.
 - Disabling a debt's payment flow removes the debt AND its payments from the projection (with a
-  warning) — unless the scenario also gives it a `payoff` event, in which case the flow is kept:
-  payments continue until the payoff date, then stop. So "sell the car" = disable tag `car` +
-  payoff on the sale date + one-off sale income.
+  warning) — unless the scenario also gives it a `payoff` or `settle` event, in which case the flow
+  is kept: payments continue until that date, then stop.
+- `end` entries (`{"flow"|"tag", "after": DATE}`) drop every occurrence after DATE, like a
+  scenario-only `until`. Ending a debt's payment flow without a payoff/settle by then warns: the
+  balance stays and keeps accruing interest.
+- `settle` (scenario-only, never stored) clears the debt on its date: `amount` is the proceeds
+  applied to it (a sale price); owed − proceeds is paid from cash (`settle` ledger row; negative =
+  received as income). So "sell the car" = settle on the sale date + `end` tag `car` after it.
+- Dates may be the placeholder `"?"` (`"?+N"`, `"?-N"`): see `cash earliest` and `--on`.
 - Ad-hoc flows are keyed `s:1`, `s:2`, … (in order) and can be referenced by `debt_events`.
 - `amount_changes` are piecewise: `from` (inclusive, default = as-of) and optional `until`.
 - Output echoes the scenario under `scenario` and lists what it did under `scenario_applied`.
@@ -275,6 +308,18 @@ cash breakeven --scenario sell.json          # → data.breakeven.date / status 
 cash compare --scenario sell.json --months 24 # → side-by-side series
 # or, without a file:
 cash breakeven --disable-tag car --add-income "Car sale:15000@2026-10-15" --payoff "Car loan@2026-10-15" --select breakeven
+```
+
+**"I want to sell the car: pay the loan down to $29,500 and buy a $550 flight to deal with it. When is
+the earliest I can, without my balance dipping below $5,000?"** (everything tagged `car` — payment,
+insurance, storage — stops after the sale)
+```
+cash earliest --starting-balance 3500 --floor 5000 --months 12 \
+  --settle "Mini Cooper:29500@?" --add-expense "Flight:550@?" --stop-tag "car@?" \
+  --select status,date,result.min_after,result.headroom,result.placeholder_entries,last_infeasible
+# → data.date (e.g. 2026-12-11), result.placeholder_entries shows the cash the settle actually cost
+cash project --starting-balance 3500 --until 2027-03-31 --on 2026-12-11 \
+  --settle "Mini Cooper:29500@?" --add-expense "Flight:550@?" --stop-tag "car@?"   # the detail
 ```
 
 **"What does my loan look like if I pay an extra $200 a month?"**

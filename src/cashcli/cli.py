@@ -21,9 +21,16 @@ from cashcli.models import Compounding, DayCount, EventType, Flow, Kind, Payment
 from cashcli.money import cents_to_str, parse_amount, parse_rate, rate_to_str
 from cashcli.queries.compare import compare
 from cashcli.queries.debt_schedule import debt_schedule
+from cashcli.queries.earliest import earliest
 from cashcli.queries.project import project
 from cashcli.queries.summary import summary
-from cashcli.scenario import build_effective_model, describe, load_scenario
+from cashcli.scenario import (
+    build_effective_model,
+    describe,
+    has_placeholder,
+    load_scenario,
+    resolve_placeholders,
+)
 from cashcli.select import select
 from cashcli.shortcuts import add_shortcut_flags, merge_scenarios, scenario_from_flags
 
@@ -158,13 +165,24 @@ def _weekly_spend(p: argparse.ArgumentParser) -> None:
     )
 
 
-def _scenario(p: argparse.ArgumentParser) -> None:
+def _on_flag(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--on",
+        metavar="DATE",
+        help="resolve the '?' date placeholder used in shortcut flags / scenario JSON to DATE "
+        "(`cash earliest` searches for it instead)",
+    )
+
+
+def _scenario(p: argparse.ArgumentParser, *, on: bool = True) -> None:
     g = p.add_mutually_exclusive_group()
     g.add_argument(
         "--scenario", metavar="FILE", help="scenario JSON file, or - for stdin (see `cash schema`)"
     )
     g.add_argument("--scenario-json", metavar="JSON", help="inline scenario JSON")
     add_shortcut_flags(p)
+    if on:
+        _on_flag(p)
 
 
 def _weekly_cents(conn, args) -> int:
@@ -175,9 +193,21 @@ def _weekly_cents(conn, args) -> int:
     return parse_amount(stored) if stored else 0
 
 
-def _scenario_spec(args) -> dict | None:
+def _scenario_spec(args, *, allow_placeholder: bool = False) -> dict | None:
     loaded = load_scenario(getattr(args, "scenario", None), getattr(args, "scenario_json", None))
-    return merge_scenarios(loaded, scenario_from_flags(args))
+    spec = merge_scenarios(loaded, scenario_from_flags(args))
+    on = getattr(args, "on", None)
+    if on:
+        if not has_placeholder(spec):
+            raise CashError("--on given but no date in the scenario is '?'", "usage")
+        return resolve_placeholders(spec, parse_date(on))
+    if has_placeholder(spec) and not allow_placeholder:
+        raise CashError(
+            "the scenario uses the '?' date placeholder: pass --on DATE to pin it, or run "
+            "`cash earliest` to search for the first date that keeps a balance floor",
+            "usage",
+        )
+    return spec
 
 
 def _resolve_window(args, today: date) -> tuple[date, date]:
@@ -395,7 +425,9 @@ def build_parser() -> Parser:
     e = es.add_parser("add", help="add an event")
     _common(e)
     e.add_argument("flow")
-    e.add_argument("--type", required=True, choices=[t.value for t in EventType])
+    e.add_argument(
+        "--type", required=True, choices=[t.value for t in EventType if t != EventType.SETTLE]
+    )
     e.add_argument("--date", required=True)
     e.add_argument("--rate", help="for rate_change")
     e.add_argument(
@@ -454,6 +486,7 @@ def build_parser() -> Parser:
     p.add_argument("--scenario", metavar="FILE", help="scenario JSON for side B (or - for stdin)")
     p.add_argument("--scenario-json", metavar="JSON")
     add_shortcut_flags(p)
+    _on_flag(p)
     p.add_argument("--starting-balance", default="0")
     _window(p)
     p.add_argument("--granularity", choices=["daily", "monthly"], default="monthly")
@@ -464,8 +497,38 @@ def build_parser() -> Parser:
     p.add_argument("--scenario", metavar="FILE")
     p.add_argument("--scenario-json", metavar="JSON")
     add_shortcut_flags(p)
+    _on_flag(p)
     _window(p, default_months=120)
     _weekly_spend(p)
+
+    p = cmd(
+        "earliest",
+        "first date on which a what-if dated with the '?' placeholder keeps the balance at or "
+        "above a floor from that date to the end of the horizon",
+    )
+    p.add_argument("--starting-balance", default="0", help="cash on hand at as-of (default 0)")
+    p.add_argument(
+        "--floor",
+        required=True,
+        metavar="A",
+        help="the balance must never drop below this from the candidate date through until",
+    )
+    p.add_argument(
+        "--measure",
+        choices=["balance", "spare"],
+        default="balance",
+        help="what the floor applies to: raw end-of-day balance (default) or the spare balance "
+        "(balance minus bills due before the next income; stricter)",
+    )
+    _window(p)
+    p.add_argument(
+        "--from", dest="from_date", metavar="DATE", help="first candidate date (default: as-of)"
+    )
+    p.add_argument("--before", metavar="DATE", help="last candidate date (default: until)")
+    p.add_argument("--step", type=int, default=1, metavar="DAYS", help="days between candidates")
+    p.add_argument("--weekdays", action="store_true", help="only consider Monday-Friday dates")
+    _weekly_spend(p)
+    _scenario(p, on=False)
 
     p = cmd("export", "dump the whole budget as JSON")
     p.add_argument("-o", "--output", metavar="FILE")
@@ -772,6 +835,27 @@ def h_compare(args, conn, today: date, *, breakeven_only: bool):
     return data, warnings
 
 
+def h_earliest(args, conn, today: date):
+    as_of, until = _resolve_window(args, today)
+    spec = _scenario_spec(args, allow_placeholder=True)
+    data, warnings = earliest(
+        repo.list_flows(conn, include_inactive=True),
+        spec,
+        as_of=as_of,
+        until=until,
+        starting_balance_cents=parse_amount(args.starting_balance, allow_negative=True),
+        floor_cents=parse_amount(args.floor, allow_negative=True),
+        measure=args.measure,
+        first=parse_date(args.from_date) if args.from_date else None,
+        last=parse_date(args.before) if args.before else None,
+        step=args.step,
+        weekdays_only=args.weekdays,
+        weekly_spend_cents=_weekly_cents(conn, args),
+        verbose=getattr(args, "verbose", False),
+    )
+    return data, warnings
+
+
 def h_config(args, conn):
     if args.sub == "set":
         if args.key == "weekly_spend":
@@ -907,6 +991,8 @@ def main(argv: list[str] | None = None) -> int:
                     data, warnings = h_compare(args, conn, today, breakeven_only=False)
                 elif args.command == "breakeven":
                     data, warnings = h_compare(args, conn, today, breakeven_only=True)
+                elif args.command == "earliest":
+                    data, warnings = h_earliest(args, conn, today)
                 elif args.command == "export":
                     data, warnings = h_export(args, conn)
                 elif args.command == "import":

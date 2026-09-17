@@ -1,13 +1,16 @@
 """Command-line shortcuts for the most common what-ifs, merged into a scenario dict.
 
     --disable FLOW            --disable-tag TAG          --enable FLOW
+    --stop FLOW@DATE          --stop-tag TAG@DATE
     --payoff FLOW@DATE        --extra-payment FLOW:AMOUNT@DATE
+    --settle FLOW:PROCEEDS@DATE
     --set-payment FLOW:AMOUNT@DATE                      --rate-change FLOW:RATE@DATE
     --add-income NAME:AMOUNT@DATE                       --add-expense NAME:AMOUNT@DATE
     --set-amount FLOW:AMOUNT[@FROM]
 
 `FLOW`/`NAME` may contain spaces and colons (quote them); the amount is taken after the LAST ':'
-and the date after the LAST '@'.
+and the date after the LAST '@'. Any DATE may be the placeholder `?` (or `?+N` / `?-N` days),
+resolved by `cash earliest` or `--on DATE`.
 """
 
 from __future__ import annotations
@@ -46,9 +49,19 @@ def scenario_from_flags(args) -> dict | None:
         sc.setdefault("disable", {}).setdefault("tags", []).append(tag)
     for flow in getattr(args, "enable", None) or []:
         sc.setdefault("enable", {}).setdefault("flows", []).append(flow)
+    for spec in getattr(args, "stop", None) or []:
+        flow, d = _split_date(spec, "--stop")
+        add("end", {"flow": flow, "after": d})
+    for spec in getattr(args, "stop_tag", None) or []:
+        tag, d = _split_date(spec, "--stop-tag")
+        add("end", {"tag": tag, "after": d})
     for spec in getattr(args, "payoff", None) or []:
         flow, d = _split_date(spec, "--payoff")
         add("debt_events", {"flow": flow, "type": "payoff", "date": d})
+    for spec in getattr(args, "settle", None) or []:
+        head, d = _split_date(spec, "--settle")
+        flow, amount = _split_amount(head, "--settle")
+        add("debt_events", {"flow": flow, "type": "settle", "date": d, "amount": amount})
     for spec in getattr(args, "extra_payment", None) or []:
         head, d = _split_date(spec, "--extra-payment")
         flow, amount = _split_amount(head, "--extra-payment")
@@ -106,7 +119,23 @@ def add_shortcut_flags(p) -> None:
     )
     g.add_argument("--enable", action="append", metavar="FLOW", help="re-enable an inactive flow")
     g.add_argument(
+        "--stop", action="append", metavar="FLOW@DATE", help="no occurrences of FLOW after DATE"
+    )
+    g.add_argument(
+        "--stop-tag",
+        action="append",
+        metavar="TAG@DATE",
+        help="no occurrences of any flow tagged TAG after DATE",
+    )
+    g.add_argument(
         "--payoff", action="append", metavar="FLOW@DATE", help="pay a debt off in full on DATE"
+    )
+    g.add_argument(
+        "--settle",
+        action="append",
+        metavar="FLOW:PROCEEDS@DATE",
+        help="clear a debt on DATE using PROCEEDS (e.g. a sale price) toward it: the shortfall "
+        "is paid from cash, a surplus is received, and the payments stop",
     )
     g.add_argument(
         "--extra-payment",

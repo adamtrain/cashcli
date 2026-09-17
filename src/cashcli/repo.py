@@ -423,6 +423,12 @@ def add_event(
 ) -> DebtEvent:
     if conn.execute("SELECT 1 FROM debt WHERE flow_id = ?", (flow_id,)).fetchone() is None:
         raise CashError(f"flow {flow_id} has no debt record; run `cash debt set` first", "no_debt")
+    if type == EventType.SETTLE:
+        raise CashError(
+            "settle is a what-if only (use --settle or scenario debt_events); once the sale is "
+            "real, record a payoff event or remove the flow",
+            "invalid_event",
+        )
     validate_event_fields(type, rate, amount_cents)
     cur = conn.execute(
         "INSERT INTO debt_event(id, flow_id, date, type, rate, amount_cents, notes) "
@@ -451,6 +457,8 @@ def validate_event_fields(type: EventType, rate: Decimal | None, amount_cents: i
     else:
         if rate is not None or amount_cents is None:
             raise CashError(f"{type} needs --amount and no --rate", "invalid_event")
+        if type == EventType.SETTLE and amount_cents < 0:
+            raise CashError("settle proceeds must not be negative", "invalid_event")
         if type == EventType.EXTRA_PAYMENT and amount_cents <= 0:
             raise CashError("extra_payment amount must be positive", "invalid_event")
         if type == EventType.PAYMENT_CHANGE and amount_cents < 0:

@@ -46,6 +46,7 @@ class EventType(StrEnum):
     EXTRA_PAYMENT = "extra_payment"
     PAYMENT_CHANGE = "payment_change"
     PAYOFF = "payoff"
+    SETTLE = "settle"  # scenario-only: clear the debt on DATE with `amount` of proceeds applied
 
 
 @dataclass(frozen=True)

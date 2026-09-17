@@ -10,8 +10,9 @@ when do I break even?"*.
 - Debts attached to expense flows: balance, APR, simple/daily/monthly/continuous compounding,
   actual/365, actual/360 or 30/360 day counts, interest capitalization on/off, dated rate changes,
   balance adjustments, extra payments, payment changes and payoffs; full amortization schedules.
-- A daily simulation engine that projects cash, plus scenario overlays (JSON what-ifs) and
-  breakeven analysis between scenarios.
+- A daily simulation engine that projects cash, plus scenario overlays (JSON what-ifs or shortcut
+  flags such as `--settle`, `--stop-tag`, `--add-expense`), breakeven analysis between scenarios, and
+  `cash earliest`: the first date a `?`-dated what-if keeps the balance above a floor.
 - Everything lives in one sqlite file. No server, no auth, no floats (exact decimals; cents only
   where cash actually moves).
 
@@ -38,6 +39,8 @@ uv run cash project --starting-balance 3000 --months 6         # balance in 6 mo
 uv run cash summary --tag car                                   # monthly/annual car spend
 uv run cash debt schedule "Car loan"                            # amortization table, payoff date
 uv run cash breakeven --scenario sell-car.json                  # see `cash schema` for the JSON format
+uv run cash earliest --floor 5000 --starting-balance 3500 \
+  --settle "Car loan:29500@?" --add-expense "Flight:550@?" --stop-tag "car@?"   # first date that keeps the floor
 uv run cash --pretty project --starting-balance 3000            # human-readable rendering
 ```
 
