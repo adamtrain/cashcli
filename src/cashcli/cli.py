@@ -22,6 +22,7 @@ from cashcli.money import cents_to_str, parse_amount, parse_rate, rate_to_str
 from cashcli.queries.compare import compare
 from cashcli.queries.debt_schedule import debt_schedule
 from cashcli.queries.earliest import earliest
+from cashcli.queries.plan import plan
 from cashcli.queries.project import project
 from cashcli.queries.summary import summary
 from cashcli.scenario import (
@@ -530,6 +531,40 @@ def build_parser() -> Parser:
     _weekly_spend(p)
     _scenario(p, on=False)
 
+    p = cmd(
+        "plan",
+        "debt payoff plan: an extra amount per month goes to one debt at a time (avalanche = "
+        "highest rate first, snowball = smallest balance first), rolling each freed payment into "
+        "the next; reports the debt-free date, interest saved and the events to reproduce it",
+    )
+    p.add_argument(
+        "--extra", required=True, metavar="A", help="extra per month on top of scheduled payments"
+    )
+    p.add_argument(
+        "--from", dest="from_date", metavar="DATE", help="when the extra starts (default: as-of)"
+    )
+    p.add_argument("--strategy", choices=["avalanche", "snowball", "order"], default="avalanche")
+    p.add_argument(
+        "--order",
+        metavar="FLOW,FLOW,...",
+        help="explicit payoff sequence (implies --strategy order; unnamed debts follow by rate)",
+    )
+    p.add_argument("--tag", help="only debts carrying this tag")
+    p.add_argument("--exclude", action="append", metavar="FLOW", help="leave a debt out")
+    p.add_argument(
+        "--no-rollover",
+        action="store_true",
+        help="do not add a paid-off debt's scheduled payment to the extra",
+    )
+    p.add_argument(
+        "--starting-balance",
+        default=None,
+        help="if given, also project cash through the debt-free date (cash_check)",
+    )
+    _window(p, default_months=600)
+    _weekly_spend(p)
+    _scenario(p)
+
     p = cmd("export", "dump the whole budget as JSON")
     p.add_argument("-o", "--output", metavar="FILE")
     p = cmd("import", "load a JSON export")
@@ -856,6 +891,30 @@ def h_earliest(args, conn, today: date):
     return data, warnings
 
 
+def h_plan(args, conn, today: date):
+    as_of, until = _resolve_window(args, today)
+    model = _model(conn, args, as_of)
+    return plan(
+        model,
+        as_of=as_of,
+        until=until,
+        extra_cents=parse_amount(args.extra),
+        start=parse_date(args.from_date) if args.from_date else None,
+        strategy=args.strategy,
+        order=[x for x in args.order.split(",") if x.strip()] if args.order else None,
+        tag=args.tag,
+        exclude=args.exclude,
+        rollover=not args.no_rollover,
+        starting_balance_cents=(
+            parse_amount(args.starting_balance, allow_negative=True)
+            if args.starting_balance is not None
+            else None
+        ),
+        weekly_spend_cents=_weekly_cents(conn, args),
+        verbose=getattr(args, "verbose", False),
+    )
+
+
 def h_config(args, conn):
     if args.sub == "set":
         if args.key == "weekly_spend":
@@ -993,6 +1052,8 @@ def main(argv: list[str] | None = None) -> int:
                     data, warnings = h_compare(args, conn, today, breakeven_only=True)
                 elif args.command == "earliest":
                     data, warnings = h_earliest(args, conn, today)
+                elif args.command == "plan":
+                    data, warnings = h_plan(args, conn, today)
                 elif args.command == "export":
                     data, warnings = h_export(args, conn)
                 elif args.command == "import":

@@ -12,7 +12,8 @@ when do I break even?"*.
   balance adjustments, extra payments, payment changes and payoffs; full amortization schedules.
 - A daily simulation engine that projects cash, plus scenario overlays (JSON what-ifs or shortcut
   flags such as `--settle`, `--stop-tag`, `--add-expense`), breakeven analysis between scenarios, and
-  `cash earliest`: the first date a `?`-dated what-if keeps the balance above a floor.
+  `cash earliest`: the first date a `?`-dated what-if keeps the balance above a floor, and
+  `cash plan`: debt payoff plans (avalanche / snowball, with rollover) for an extra amount per month.
 - Everything lives in one sqlite file. No server, no auth, no floats (exact decimals; cents only
   where cash actually moves).
 
@@ -41,6 +42,7 @@ uv run cash debt schedule "Car loan"                            # amortization t
 uv run cash breakeven --scenario sell-car.json                  # see `cash schema` for the JSON format
 uv run cash earliest --floor 5000 --starting-balance 3500 \
   --settle "Car loan:29500@?" --add-expense "Flight:550@?" --stop-tag "car@?"   # first date that keeps the floor
+uv run cash plan --extra 500 --strategy snowball                 # debt-free date with an extra $500/month
 uv run cash --pretty project --starting-balance 3000            # human-readable rendering
 ```
 

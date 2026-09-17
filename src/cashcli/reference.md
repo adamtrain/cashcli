@@ -169,6 +169,9 @@ cash breakeven [--baseline FILE] (--scenario FILE | --scenario-json JSON) [--wee
 cash earliest --floor A [--measure balance|spare] [--starting-balance A] [--weekly-spend A]
               [--as-of D] [--until D | --months N] [--from D] [--before D] [--step DAYS] [--weekdays]
               <shortcut flags / scenario with at least one '?' date>
+cash plan --extra A [--from D] [--strategy avalanche|snowball|order] [--order "A,B,..."] [--tag T]
+          [--exclude FLOW]... [--no-rollover] [--starting-balance A] [--weekly-spend A]
+          [--as-of D] [--until D | --months N (default 600)] [--scenario ... | shortcut flags]
 ```
 - `--as-of` defaults to today; `--months` defaults to 12 (breakeven: 120; schedule: 600).
 - **project** → `weekly_spend`, `lifestyle_total` (what the weekly spend added up to in the window),
@@ -208,6 +211,21 @@ cash earliest --floor A [--measure balance|spare] [--starting-balance A] [--week
   settle actually cost), `last_infeasible{date, min_after, shortfall}` (why the day before fails),
   `best_infeasible` (closest miss when nothing works), `candidates{checked,...}`. Then run the same
   flags through `project --on DATE` for the full picture. ~5 ms per candidate.
+- **plan** answers "how fast can I clear my debts with an extra A per month?". The extra goes to one
+  debt at a time as a raised scheduled payment (`avalanche` = highest rate first, the default;
+  `snowball` = smallest balance first; `order` = the `--order` list, unnamed debts following by
+  rate). When a debt is paid off, its scheduled payment joins the pool (`--no-rollover` to keep the
+  pool at the extra only) and whatever was left of that month's money is paid on the next debt the
+  same day. Debts are those in the effective model (so `--settle`/`--stop-tag` remove a sold car
+  first), filtered by `--tag` / `--exclude`. Output: `status`, **`debt_free_on`**, `months`,
+  `interest_paid`, `baseline{debt_free_on, interest_paid}` (scheduled payments only),
+  `interest_saved`, `monthly_outlay{scheduled_payments, with_extra}`, `steps[{order, name,
+  annual_rate, balance_at_start, scheduled_payment, payment_during, from, carry_in, paid_off_on,
+  months, interest_paid, freed_to_pool, leftover_to_next, paid_off_before_turn}]` (the last step's
+  `leftover_to_next` is simply unspent), `plan_scenario{debt_events[]}` (feed it to `project
+  --scenario-json` to see the cash side, or to `debt schedule`), and `cash_check` when
+  `--starting-balance` is given (`min_balance_after_start`, `affordable`). Fixed-payment debts are
+  assumed; `interest_only` ignores the raised payment (warned).
 
 ## What-if shortcuts (prefer these for one or two tweaks)
 
@@ -320,6 +338,17 @@ cash earliest --starting-balance 3500 --floor 5000 --months 12 \
 # → data.date (e.g. 2026-12-11), result.placeholder_entries shows the cash the settle actually cost
 cash project --starting-balance 3500 --until 2027-03-31 --on 2026-12-11 \
   --settle "Mini Cooper:29500@?" --add-expense "Flight:550@?" --stop-tag "car@?"   # the detail
+```
+
+**"After selling the car, if I put an extra $1,500 a month toward everything tagged `debt`, how
+fast am I debt-free — snowball vs avalanche?"**
+```
+for s in avalanche snowball; do
+  cash plan --extra 1500 --from 2026-12-12 --tag debt --strategy $s \
+    --settle "Mini Cooper:29500@2026-12-11" --stop-tag "car@2026-12-11" --starting-balance 3500 \
+    --select debt_free_on,months,interest_paid,interest_saved,steps,cash_check.affordable
+done
+# → data.debt_free_on, steps[] = the payoff sequence with each debt's raised payment and payoff date
 ```
 
 **"What does my loan look like if I pay an extra $200 a month?"**

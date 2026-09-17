@@ -32,6 +32,9 @@ instead of doing the arithmetic yourself.
   what-if dated `?` (`--settle "Loan:29500@?" --add-expense "Flight:550@?" --stop-tag "car@?"`),
   then `project --on DATE` with the same flags for the detail. `--settle` = sell the thing and clear
   its loan with the proceeds; `--stop`/`--stop-tag` = no occurrences after a date.
+- "How fast can I pay off my debts with an extra $A/month?" → `cash plan --extra A` (`--strategy
+  avalanche|snowball`, `--tag debt`, `--from DATE`; add `--starting-balance` for the cash check).
+  Run both strategies when the user asks which is better; `steps` is the payoff sequence.
 - `cash sql "SELECT ..."` is available for ad-hoc read-only questions about the stored data.
 - A debt is an expense flow (the payment) plus a `debt set` record (balance, rate, compounding).
   `--balance` is the balance right after the `--balance-as-of` date's payment.
