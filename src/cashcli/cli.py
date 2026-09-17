@@ -108,7 +108,10 @@ def _common(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--db",
         default=argparse.SUPPRESS,
-        help="sqlite file (default: $CASHCLI_DB or ~/Documents/Backups/cashcli/budget.sqlite)",
+        help=(
+            "sqlite file (default: $CASHCLI_DB or "
+            "~/Documents/70-79 Computer/73 App Data Exports/73.02 cashcli/budget.sqlite)"
+        ),
     )
     p.add_argument(
         "--pretty",

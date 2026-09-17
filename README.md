@@ -22,8 +22,21 @@ when do I break even?"*.
 ```bash
 brew install uv            # https://docs.astral.sh/uv/
 uv sync                    # creates .venv with python-dateutil, pytest, ruff
-uv run cash init           # creates ~/Documents/Backups/cashcli/budget.sqlite (or $CASHCLI_DB / --db PATH)
+uv run cash init           # creates the database at the default location (see below)
 ```
+
+### Database location: change this first
+
+The default database path is hard-coded to the project author's own `~/Documents` layout:
+
+```
+~/Documents/70-79 Computer/73 App Data Exports/73.02 cashcli/budget.sqlite
+```
+
+That folder structure is specific to me and will mean nothing on your machine, so you should
+absolutely change it. Edit `DEFAULT_PATH` in [`src/cashcli/db.py`](src/cashcli/db.py) to wherever you
+want your budget to live (then re-run `uv tool install --reinstall .` if you installed the binary).
+For one-off use you can instead set `$CASHCLI_DB` or pass `--db PATH`.
 
 `uv tool install .` puts a `cash` binary on your PATH if you prefer not to prefix with `uv run`.
 
