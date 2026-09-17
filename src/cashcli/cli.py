@@ -24,6 +24,7 @@ from cashcli.queries.debt_schedule import debt_schedule
 from cashcli.queries.earliest import earliest
 from cashcli.queries.plan import plan
 from cashcli.queries.project import project
+from cashcli.queries.spend import spend
 from cashcli.queries.summary import summary
 from cashcli.scenario import (
     build_effective_model,
@@ -363,7 +364,7 @@ def build_parser() -> Parser:
     p = cmd("tag", "manage tags")
     ts = p.add_subparsers(dest="sub", metavar="ACTION")
     ts.required = True
-    q = ts.add_parser("list", help="list tags with flow counts")
+    q = ts.add_parser("list", help="list tags with the flows carrying each")
     _common(q)
     q = ts.add_parser("rename", help="rename a tag everywhere")
     _common(q)
@@ -476,6 +477,31 @@ def build_parser() -> Parser:
     p.add_argument("--by", choices=["tag", "flow", "both"], default="both")
     p.add_argument("--tag", help="only flows carrying this tag")
     p.add_argument("--include-inactive", action="store_true")
+    _scenario(p)
+
+    p = cmd(
+        "spend",
+        "total money going out between as-of and until for tags or flows, e.g. "
+        "`cash spend car --until 2026-12-12` (real dated occurrences, weekend shifts and "
+        "amortized debt payments included)",
+    )
+    p.add_argument(
+        "terms",
+        nargs="*",
+        metavar="TAG_OR_FLOW",
+        help="tag names or flow names (any match; `cash tag list` shows the tags); none = "
+        "everything, including the weekly lifestyle spend",
+    )
+    p.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="TAG_OR_FLOW",
+        help="leave out flows matching this tag or flow name (repeatable), e.g. car --exclude debt",
+    )
+    _window(p)
+    p.add_argument("--income", action="store_true", help="sum money coming in instead")
+    _weekly_spend(p)
     _scenario(p)
 
     p = cmd("compare", "run two scenarios side by side and find the breakeven")
@@ -693,7 +719,16 @@ def h_flow(args, conn):
 def h_tag(args, conn):
     if args.sub == "list":
         tags = repo.list_tags(conn)
-        return {"tags": [{"id": t.id, "name": t.name, "flows": t.flow_count} for t in tags]}, []
+        names: dict[str, list[str]] = {}
+        for f in repo.list_flows(conn, include_inactive=True):
+            for t in f.tags:
+                names.setdefault(t, []).append(f.name)
+        return {
+            "tags": [
+                {"name": t.name, "flows": t.flow_count, "flow_names": names.get(t.name, [])}
+                for t in tags
+            ]
+        }, []
     if args.sub == "rename":
         repo.rename_tag(conn, args.old, args.new)
         return {
@@ -815,6 +850,23 @@ def h_summary(args, conn, today: date):
     model = _model(conn, args, as_of, include_inactive=args.include_inactive)
     data, warnings = summary(
         model, as_of=as_of, mode=args.mode, months=args.months, by=args.by, tag_filter=args.tag
+    )
+    _attach_scenario(data, model, args)
+    return data, warnings
+
+
+def h_spend(args, conn, today: date):
+    as_of, until = _resolve_window(args, today)
+    model = _model(conn, args, as_of)
+    data, warnings = spend(
+        model,
+        as_of=as_of,
+        until=until,
+        terms=args.terms,
+        exclude=args.exclude,
+        known_tags=frozenset(t.name for t in repo.list_tags(conn)),
+        income=args.income,
+        weekly_spend_cents=_weekly_cents(conn, args),
     )
     _attach_scenario(data, model, args)
     return data, warnings
@@ -1046,6 +1098,8 @@ def main(argv: list[str] | None = None) -> int:
                     data, warnings = h_project(args, conn, today)
                 elif args.command == "summary":
                     data, warnings = h_summary(args, conn, today)
+                elif args.command == "spend":
+                    data, warnings = h_spend(args, conn, today)
                 elif args.command == "compare":
                     data, warnings = h_compare(args, conn, today, breakeven_only=False)
                 elif args.command == "breakeven":

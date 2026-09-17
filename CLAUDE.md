@@ -25,9 +25,13 @@ instead of doing the arithmetic yourself.
   incidentals, per week, prorated daily), or the stored default set with
   `cash config set weekly_spend A`. If neither exists, ask the user for the figure; 0 is almost
   always too optimistic.
+- "How much will I spend on X between now and DATE?" → `cash tag list` (tags with the flow names
+  each covers), then `cash spend TAG --until DATE` → `total`. Terms may be tags or flow names and
+  combine (`cash spend car "Bay Ridge" --exclude debt`); no terms = everything. `summary --tag T` is
+  for monthly/annual averages, not dated totals.
 - What-ifs are scenario JSON overlays (`--scenario FILE` / `--scenario-json '{...}'`), never edits to
   the stored budget. Use `breakeven` / `compare` for "should I do X" questions and `project` for
-  "how much will I have" questions; `summary --tag T` for "what do I spend on T".
+  "how much will I have" questions.
 - "When is the earliest I can do X without dropping below $A?" → `cash earliest --floor A` with the
   what-if dated `?` (`--settle "Loan:29500@?" --add-expense "Flight:550@?" --stop-tag "car@?"`),
   then `project --on DATE` with the same flags for the detail. `--settle` = sell the thing and clear

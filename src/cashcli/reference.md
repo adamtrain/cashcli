@@ -115,7 +115,7 @@ cash flow update FLOW [--name N] [--amount A] [--rrule R | --one-off] [--dtstart
                       [--add-tag T ...] [--remove-tag T ...] [--set-tags [T ...]]
 cash cleanup                        # explicit run of the automatic prior-month cleanup
 cash flow remove FLOW               # also removes its debt record, events and tag links
-cash tag list | rename OLD NEW | remove NAME
+cash tag list | rename OLD NEW | remove NAME   # list → tags[{name, flows, flow_names[]}]
 ```
 Inactive flows are ignored by every query unless a scenario re-enables them
 (`summary --include-inactive` also shows them).
@@ -160,6 +160,8 @@ cash debt schedule FLOW [--as-of D] [--until D | --months N] [--scenario ...] [-
 ```
 cash project [--starting-balance A] [--weekly-spend A] [--as-of D] [--until D | --months N]
              [--granularity monthly|daily] [--ledger] [--no-spare] [--scenario FILE|- | --scenario-json JSON]
+cash spend [TAG_OR_FLOW ...] [--exclude TAG_OR_FLOW]... [--income] [--weekly-spend A]
+           [--as-of D] [--until D | --months N] [--scenario ... | shortcut flags]
 cash summary [--as-of D] [--mode steady|actual] [--months N] [--by tag|flow|both] [--tag T]
              [--include-inactive] [--scenario ...]
 cash compare [--baseline FILE] (--scenario FILE | --scenario-json JSON) [--starting-balance A]
@@ -185,6 +187,15 @@ cash plan --extra A [--from D] [--strategy avalanche|snowball|order] [--order "A
   `flows_used[{occurrences,total}]`, `total_debt_at_until`, and `ledger[]` with `--ledger`.
   Balances are end-of-day. A debt whose balance date is before as-of is rolled forward silently
   (payments and interest between the two dates are applied, cash is not tracked before as-of).
+- **spend** answers "how much will I spend on X between now and DATE?": `cash spend car --until
+  2026-12-12`. Each term is a tag name, else a flow name (case-insensitive); several terms are a
+  union, `--exclude` removes matches (`car --exclude debt`), no terms = every outflow including the
+  weekly lifestyle spend (tag `lifestyle`). Unknown terms fail with `unknown_term` listing the tags.
+  Sums the dated occurrences the projection actually produces (weekend shifts, amortized debt
+  payments ending at payoff, scenario overlays), from as-of through until inclusive. `--income`
+  sums money coming in instead. Output: **`total`**, `matched[{term,as:tag|flow}]`, `excluded`,
+  `by_flow[{flow,name,tags,count,total}]`, `items[{date,name,amount}]` (lifestyle rows omitted),
+  `lifestyle_total`. Use `summary` for monthly/annual averages instead.
 - **summary** `steady` (default): each recurring flow contributes `amount × occurrences_per_year / 12`
   per month (occurrences counted over an 84-year window, so fortnightly = 26.095/yr, monthly = 12).
   One-offs are listed under `one_offs`, not counted. `actual`: sums real occurrences in the next
@@ -308,6 +319,12 @@ weekly lifestyle budget, or use the one they usually quote)
 cash project --starting-balance 3000 --months 6 --weekly-spend 200
 # → data.spare_balance (money actually free to use: balance minus bills due before the next paycheck)
 #   data.ending_balance is the raw end-of-day balance; data.spare lists the bills that were deducted
+```
+
+**"How much will I spend on car-related expenses between now and December 12?"**
+```
+cash tag list --select tags       # is there a tag for it? (flow_names shows what it covers)
+cash spend car --until 2026-12-12 # → data.total, by_flow, items (dates as they will be pulled)
 ```
 
 **"How much am I paying on car-related expenses each month?"**
