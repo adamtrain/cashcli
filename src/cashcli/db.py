@@ -10,15 +10,16 @@ from cashcli.errors import CashError
 from cashcli.migrations import LATEST_VERSION, MIGRATIONS
 
 ENV_VAR = "CASHCLI_DB"
-# Specific to the project author's ~/Documents layout (Johnny.Decimal). Change it for your machine.
-DEFAULT_PATH = (
-    Path.home()
-    / "Documents"
-    / "70-79 Computer"
-    / "73 App Data Exports"
-    / "73.02 cashcli"
-    / "budget.sqlite"
-)
+
+
+def default_path() -> Path:
+    """~/.config/cashcli/budget.sqlite, honouring $XDG_CONFIG_HOME when it is set."""
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    base = Path(xdg).expanduser() if xdg else Path.home() / ".config"
+    return base / "cashcli" / "budget.sqlite"
+
+
+DEFAULT_PATH = default_path()
 
 
 def resolve_db_path(cli_arg: str | None) -> Path:
@@ -27,7 +28,7 @@ def resolve_db_path(cli_arg: str | None) -> Path:
     env = os.environ.get(ENV_VAR)
     if env:
         return Path(env).expanduser()
-    return DEFAULT_PATH
+    return default_path()
 
 
 def _open(path: Path) -> sqlite3.Connection:

@@ -336,3 +336,20 @@ def test_env_var_db(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("CASHCLI_DB", str(p))
     assert main(["init"]) == 0
     assert p.exists()
+
+
+def test_default_db_path(monkeypatch, tmp_path):
+    from pathlib import Path
+
+    from cashcli.db import resolve_db_path
+
+    monkeypatch.delenv("CASHCLI_DB", raising=False)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    assert resolve_db_path(None) == Path.home() / ".config" / "cashcli" / "budget.sqlite"
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    assert resolve_db_path(None) == tmp_path / "xdg" / "cashcli" / "budget.sqlite"
+
+    monkeypatch.setenv("CASHCLI_DB", str(tmp_path / "env.sqlite"))
+    assert resolve_db_path(None) == tmp_path / "env.sqlite"
+    assert resolve_db_path(str(tmp_path / "cli.sqlite")) == tmp_path / "cli.sqlite"

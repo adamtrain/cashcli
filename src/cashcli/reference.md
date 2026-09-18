@@ -8,8 +8,8 @@ every command prints a single JSON object; nothing else goes to stdout.
 cash [--db PATH] [--pretty] COMMAND [ARGS]        # global flags may also follow the command
 ```
 
-- `--db PATH` — sqlite file. Default: `$CASHCLI_DB`, else
-  `~/Documents/70-79 Computer/73 App Data Exports/73.02 cashcli/budget.sqlite`.
+- `--db PATH` — sqlite file. Default: `$CASHCLI_DB`, else `~/.config/cashcli/budget.sqlite`
+  (`$XDG_CONFIG_HOME/cashcli/budget.sqlite` when that variable is set).
 - `--pretty` — human-readable text instead of JSON (agents should NOT use it).
 - `--no-cleanup` — skip the automatic prior-month cleanup (see below).
 - `--select PATHS` — output only these comma-separated dotted paths of `data`, e.g.

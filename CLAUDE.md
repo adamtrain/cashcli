@@ -7,9 +7,9 @@ instead of doing the arithmetic yourself.
 ## Using the tool
 - Run commands with `uv run cash ...` from this directory (or `cash ...` if installed with `uv tool install .`).
 - Start by reading the reference: `uv run cash schema` (JSON; the markdown is in `data.reference`).
-- The database defaults to `$CASHCLI_DB`, else
-  `~/Documents/70-79 Computer/73 App Data Exports/73.02 cashcli/budget.sqlite`
-  (`DEFAULT_PATH` in `src/cashcli/db.py`). Use `--db PATH` for a throwaway file. `cash init` creates it.
+- The database defaults to `$CASHCLI_DB`, else `~/.config/cashcli/budget.sqlite`
+  (`default_path()` in `src/cashcli/db.py`; honours `$XDG_CONFIG_HOME`). Use `--db PATH` for a
+  throwaway file. `cash init` creates it.
 - Keep outputs small: add `--select a,b.c` to get just the fields you need (e.g.
   `--select spare_balance,spare.committed_total,ending_balance`), and prefer the what-if shortcut
   flags (`--extra-payment "Mini Cooper:15000@2026-11-13"`, `--disable-tag car`, `--payoff`,
