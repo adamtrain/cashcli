@@ -11,7 +11,9 @@ instead of doing the arithmetic yourself.
   (`default_path()` in `src/cashcli/db.py`; honours `$XDG_CONFIG_HOME`). Use `--db PATH` for a
   throwaway file. `cash init` creates it.
 - Keep outputs small: add `--select a,b.c` to get just the fields you need (e.g.
-  `--select spare_balance,spare.committed_total,ending_balance`), and prefer the what-if shortcut
+  `--select spare_balance,spare.committed_total,ending_balance`; paths are relative to `data`).
+  If a path misses, the error lists the keys that are there — fix the path from that, don't dump
+  the whole output. Prefer the what-if shortcut
   flags (`--extra-payment "Mini Cooper:15000@2026-11-13"`, `--disable-tag car`, `--payoff`,
   `--add-income`) over hand-written scenario JSON. `--verbose` exists when you need the detail.
 - Output is always one JSON envelope on stdout: check `ok`, read `data`, and **always relay `warnings`**
@@ -45,6 +47,9 @@ instead of doing the arithmetic yourself.
   `--balance` is the balance right after the `--balance-as-of` date's payment.
 - ACH-pulled items use `--ach` (weekend dates move to the following Monday); `--weekend previous`
   for items that pull on the preceding Friday.
+- Never do date arithmetic by hand for a query window: the window flags (`--as-of`, `--until`,
+  `--from`, `--before`, `--on`) take `today`, `tomorrow`, `yesterday`, `eom`, `eoy` and `±N[dwmy]`
+  (`--as-of tomorrow --until +4w`; `±N`/`eom` count from as-of). Stored dates stay absolute.
 - Prior-month data is irrelevant to the user and is cleaned up automatically before every command
   (one-offs and ended flows removed, debts rolled forward to the end of last month, paid-off debts
   removed). Relay the envelope's `cleanup` list when present. `--no-cleanup` skips it;

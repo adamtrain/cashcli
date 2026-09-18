@@ -12,7 +12,7 @@ from pathlib import Path
 
 from cashcli import __version__, db, repo
 from cashcli.cleanup import run_cleanup
-from cashcli.dates import add_months, iso, parse_date
+from cashcli.dates import RELATIVE_DATE_GRAMMAR, add_months, iso, parse_date, parse_date_rel
 from cashcli.dates import today as today_fn
 from cashcli.errors import CashError
 from cashcli.formatting import dumps, pretty
@@ -126,8 +126,9 @@ def _common(p: argparse.ArgumentParser) -> None:
         "--select",
         default=argparse.SUPPRESS,
         metavar="PATHS",
-        help="only output these comma-separated dotted paths of data, "
-        "e.g. spare_balance,spare.committed_total,series[-1].balance",
+        help="only output these comma-separated dotted paths of data (no `data.` prefix), "
+        "e.g. spare_balance,spare.committed_total,series[-1].balance; a miss lists the keys "
+        "that are there",
     )
     p.add_argument(
         "--compact",
@@ -145,9 +146,18 @@ def _common(p: argparse.ArgumentParser) -> None:
 
 
 def _window(p: argparse.ArgumentParser, default_months: int = 12) -> None:
-    p.add_argument("--as-of", metavar="DATE", help="projection start (default: today)")
+    p.add_argument(
+        "--as-of",
+        metavar="DATE",
+        help=f"projection start (default: today). DATE is {RELATIVE_DATE_GRAMMAR}; "
+        "relative forms count from today",
+    )
     g = p.add_mutually_exclusive_group()
-    g.add_argument("--until", metavar="DATE", help="projection end, inclusive")
+    g.add_argument(
+        "--until",
+        metavar="DATE",
+        help="projection end, inclusive; relative forms (+4w, eom, ...) count from as-of",
+    )
     g.add_argument(
         "--months",
         type=int,
@@ -172,7 +182,7 @@ def _on_flag(p: argparse.ArgumentParser) -> None:
         "--on",
         metavar="DATE",
         help="resolve the '?' date placeholder used in shortcut flags / scenario JSON to DATE "
-        "(`cash earliest` searches for it instead)",
+        "(relative forms count from as-of; `cash earliest` searches for it instead)",
     )
 
 
@@ -195,14 +205,17 @@ def _weekly_cents(conn, args) -> int:
     return parse_amount(stored) if stored else 0
 
 
-def _scenario_spec(args, *, allow_placeholder: bool = False) -> dict | None:
+def _scenario_spec(
+    args, *, allow_placeholder: bool = False, base: date | None = None
+) -> dict | None:
+    """`base` is the as-of date relative --on expressions count from."""
     loaded = load_scenario(getattr(args, "scenario", None), getattr(args, "scenario_json", None))
     spec = merge_scenarios(loaded, scenario_from_flags(args))
     on = getattr(args, "on", None)
     if on:
         if not has_placeholder(spec):
             raise CashError("--on given but no date in the scenario is '?'", "usage")
-        return resolve_placeholders(spec, parse_date(on))
+        return resolve_placeholders(spec, parse_date_rel(on, base) if base else parse_date(on))
     if has_placeholder(spec) and not allow_placeholder:
         raise CashError(
             "the scenario uses the '?' date placeholder: pass --on DATE to pin it, or run "
@@ -213,9 +226,10 @@ def _scenario_spec(args, *, allow_placeholder: bool = False) -> dict | None:
 
 
 def _resolve_window(args, today: date) -> tuple[date, date]:
-    as_of = parse_date(args.as_of) if args.as_of else today
+    """as-of (relative forms count from today), until (relative forms count from as-of)."""
+    as_of = parse_date_rel(args.as_of, today) if args.as_of else today
     if args.until:
-        until = parse_date(args.until)
+        until = parse_date_rel(args.until, as_of)
     else:
         until = add_months(as_of, args.months if args.months is not None else args.default_months)
     if until < as_of:
@@ -225,7 +239,7 @@ def _resolve_window(args, today: date) -> tuple[date, date]:
 
 def _model(conn, args, as_of: date, *, include_inactive: bool = False, scenario=None):
     if scenario is None:
-        scenario = _scenario_spec(args)
+        scenario = _scenario_spec(args, base=as_of)
     flows = repo.list_flows(conn, include_inactive=True)
     return build_effective_model(flows, scenario, as_of, include_inactive=include_inactive)
 
@@ -471,7 +485,7 @@ def build_parser() -> Parser:
     _scenario(p)
 
     p = cmd("summary", "monthly / annual equivalents by flow and tag")
-    p.add_argument("--as-of", metavar="DATE")
+    p.add_argument("--as-of", metavar="DATE", help="default today; relative forms accepted")
     p.add_argument("--mode", choices=["steady", "actual"], default="steady")
     p.add_argument("--months", type=int, default=12, help="window for --mode actual")
     p.add_argument("--by", choices=["tag", "flow", "both"], default="both")
@@ -549,9 +563,16 @@ def build_parser() -> Parser:
     )
     _window(p)
     p.add_argument(
-        "--from", dest="from_date", metavar="DATE", help="first candidate date (default: as-of)"
+        "--from",
+        dest="from_date",
+        metavar="DATE",
+        help="first candidate date (default: as-of; relative forms count from as-of)",
     )
-    p.add_argument("--before", metavar="DATE", help="last candidate date (default: until)")
+    p.add_argument(
+        "--before",
+        metavar="DATE",
+        help="last candidate date (default: until; relative forms count from as-of)",
+    )
     p.add_argument("--step", type=int, default=1, metavar="DAYS", help="days between candidates")
     p.add_argument("--weekdays", action="store_true", help="only consider Monday-Friday dates")
     _weekly_spend(p)
@@ -567,7 +588,10 @@ def build_parser() -> Parser:
         "--extra", required=True, metavar="A", help="extra per month on top of scheduled payments"
     )
     p.add_argument(
-        "--from", dest="from_date", metavar="DATE", help="when the extra starts (default: as-of)"
+        "--from",
+        dest="from_date",
+        metavar="DATE",
+        help="when the extra starts (default: as-of; relative forms count from as-of)",
     )
     p.add_argument("--strategy", choices=["avalanche", "snowball", "order"], default="avalanche")
     p.add_argument(
@@ -844,7 +868,7 @@ def h_project(args, conn, today: date):
 
 
 def h_summary(args, conn, today: date):
-    as_of = parse_date(args.as_of) if args.as_of else today
+    as_of = parse_date_rel(args.as_of, today) if args.as_of else today
     if args.months <= 0:
         raise CashError("--months must be positive", "usage")
     model = _model(conn, args, as_of, include_inactive=args.include_inactive)
@@ -875,7 +899,7 @@ def h_spend(args, conn, today: date):
 def h_compare(args, conn, today: date, *, breakeven_only: bool):
     as_of, until = _resolve_window(args, today)
     base_spec = load_scenario(args.baseline, None) if args.baseline else None
-    scen_spec = _scenario_spec(args)
+    scen_spec = _scenario_spec(args, base=as_of)
     if scen_spec is None:
         raise CashError(
             "a scenario is required: --scenario FILE, --scenario-json JSON, or shortcut flags "
@@ -924,7 +948,7 @@ def h_compare(args, conn, today: date, *, breakeven_only: bool):
 
 def h_earliest(args, conn, today: date):
     as_of, until = _resolve_window(args, today)
-    spec = _scenario_spec(args, allow_placeholder=True)
+    spec = _scenario_spec(args, allow_placeholder=True, base=as_of)
     data, warnings = earliest(
         repo.list_flows(conn, include_inactive=True),
         spec,
@@ -933,8 +957,8 @@ def h_earliest(args, conn, today: date):
         starting_balance_cents=parse_amount(args.starting_balance, allow_negative=True),
         floor_cents=parse_amount(args.floor, allow_negative=True),
         measure=args.measure,
-        first=parse_date(args.from_date) if args.from_date else None,
-        last=parse_date(args.before) if args.before else None,
+        first=parse_date_rel(args.from_date, as_of) if args.from_date else None,
+        last=parse_date_rel(args.before, as_of) if args.before else None,
         step=args.step,
         weekdays_only=args.weekdays,
         weekly_spend_cents=_weekly_cents(conn, args),
@@ -951,7 +975,7 @@ def h_plan(args, conn, today: date):
         as_of=as_of,
         until=until,
         extra_cents=parse_amount(args.extra),
-        start=parse_date(args.from_date) if args.from_date else None,
+        start=parse_date_rel(args.from_date, as_of) if args.from_date else None,
         strategy=args.strategy,
         order=[x for x in args.order.split(",") if x.strip()] if args.order else None,
         tag=args.tag,

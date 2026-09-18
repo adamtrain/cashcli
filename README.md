@@ -42,6 +42,7 @@ uv run cash debt set "Car loan" --balance 20000 --balance-as-of 2026-10-01 --rat
 uv run cash flow add --name "Car insurance" --kind expense --amount 120 --rrule "FREQ=MONTHLY;BYMONTHDAY=15" --dtstart 2026-10-15 --tag car
 
 uv run cash project --starting-balance 3000 --months 6         # balance in 6 months, min/max, series
+uv run cash project --as-of tomorrow --until +4w --select totals # relative dates on any query window
 uv run cash summary --tag car                                   # monthly/annual car spend
 uv run cash debt schedule "Car loan"                            # amortization table, payoff date
 uv run cash breakeven --scenario sell-car.json                  # see `cash schema` for the JSON format

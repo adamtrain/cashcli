@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import calendar
 import os
+import re
 from collections.abc import Iterator
 from datetime import date, timedelta
 
@@ -29,6 +30,52 @@ def parse_date(text: str | date) -> date:
         return date.fromisoformat(str(text).strip())
     except ValueError as exc:
         raise CashError(f"invalid date {text!r}; expected YYYY-MM-DD", "invalid_date") from exc
+
+
+RELATIVE_DATE_GRAMMAR = (
+    "YYYY-MM-DD, today, tomorrow, yesterday, eom (end of month), eoy (end of year), "
+    "or +N/-N with a unit d/w/m/y (e.g. +28d, +4w, -1m)"
+)
+_RELATIVE = re.compile(r"^([+-])(\d+)([dwmy])$")
+
+
+def parse_date_rel(text: str | date, base: date) -> date:
+    """A date, or a relative expression resolved against `base`.
+
+    today/tomorrow/yesterday anchor on the real today (CASHCLI_TODAY); eom/eoy and +N/-N
+    anchor on `base` (the query's as-of date; for --as-of itself, today). Case-insensitive.
+    """
+    if isinstance(text, date):
+        return text
+    raw = str(text).strip()
+    word = raw.lower()
+    if word == "today":
+        return today()
+    if word == "tomorrow":
+        return today() + timedelta(days=1)
+    if word == "yesterday":
+        return today() - timedelta(days=1)
+    if word == "eom":
+        return month_end(base)
+    if word == "eoy":
+        return date(base.year, 12, 31)
+    m = _RELATIVE.match(word)
+    if m:
+        n = int(m.group(2)) * (1 if m.group(1) == "+" else -1)
+        unit = m.group(3)
+        if unit == "d":
+            return base + timedelta(days=n)
+        if unit == "w":
+            return base + timedelta(weeks=n)
+        if unit == "m":
+            return add_months(base, n)
+        return add_months(base, 12 * n)
+    try:
+        return date.fromisoformat(raw)
+    except ValueError as exc:
+        raise CashError(
+            f"invalid date {text!r}; expected {RELATIVE_DATE_GRAMMAR}", "invalid_date"
+        ) from exc
 
 
 def iso(d: date) -> str:

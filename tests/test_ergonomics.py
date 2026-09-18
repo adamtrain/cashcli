@@ -141,3 +141,87 @@ def test_config_weekly_spend_default(budget):
 def test_schedule_max_rows(budget):
     d = budget("debt", "schedule", "Car loan", "--as-of", "2026-10-01", "--max-rows", "5")["data"]
     assert len(d["rows"]) == 5 and d["rows_truncated"] is True and d["payments_remaining"] == 60
+
+
+def test_select_errors_teach_the_shape(budget):
+    err = budget("project", "--select", "flows.name", expect_ok=False)["error"]
+    assert err["code"] == "select_not_found"
+    assert "data has no key 'flows'" in err["message"]
+    assert "ending_balance" in err["message"] and "totals" in err["message"]  # keys listed
+
+    err = budget("project", "--select", "totals.nope", expect_ok=False)["error"]
+    assert "'totals' has no key 'nope'" in err["message"]
+    assert "income, interest_paid, net" in err["message"]
+
+    err = budget("project", "--select", "series.balance", expect_ok=False)["error"]
+    assert "'series' has no key 'balance'" in err["message"] and "a list of" in err["message"]
+
+    err = budget("project", "--select", "series[99]", expect_ok=False)["error"]
+    assert "'series' has no index [99]" in err["message"]
+
+    err = budget("project", "--select", "ending_balance.x", expect_ok=False)["error"]
+    assert "'ending_balance' has no key 'x'" in err["message"] and "no fields" in err["message"]
+
+    err = budget("project", "--select", "flows_used", expect_ok=False)["error"]
+    assert "only in the output when --verbose is given" in err["message"]
+    err = budget("project", "--select", "ledger", expect_ok=False)["error"]
+    assert "only in the output when --ledger is given" in err["message"]
+
+
+def test_select_forgives_data_prefix(budget):
+    d = budget("project", "--select", "data.ending_balance,ending_balance")["data"]
+    assert d["data.ending_balance"] == d["ending_balance"]
+    d = budget("schema", "--select", "data.reference")["data"]
+    assert d["data.reference"].startswith("# cashcli reference")
+
+
+def test_relative_dates_on_window_flags(budget):
+    # conftest pins today = 2026-09-16
+    d = budget("project", "--as-of", "tomorrow", "--until", "+4w", "--select", "as_of,until")[
+        "data"
+    ]
+    assert d == {"as_of": "2026-09-17", "until": "2026-10-15"}
+    d = budget("project", "--until", "eom", "--select", "as_of,until")["data"]
+    assert d == {"as_of": "2026-09-16", "until": "2026-09-30"}
+    d = budget("spend", "--as-of", "+1m", "--until", "+1m", "--select", "from,until")["data"]
+    assert d == {"from": "2026-10-16", "until": "2026-11-16"}  # until counts from as-of
+    d = budget("summary", "--as-of", "yesterday", "--select", "as_of")["data"]
+    assert d == {"as_of": "2026-09-15"}
+    # absolute-date sanity: `--until yesterday` while as-of is today is a usage error
+    err = budget("project", "--until", "yesterday", expect_ok=False)["error"]
+    assert err["code"] == "usage"
+    # relative --on / --from count from as-of
+    d = budget(
+        "project",
+        "--as-of",
+        "2026-10-01",
+        "--until",
+        "+2m",
+        "--add-expense",
+        "Flight:550@?",
+        "--on",
+        "+1w",
+        "--ledger",
+        "--select",
+        "ledger",
+    )["data"]
+    assert any(e["name"] == "Flight" and e["date"] == "2026-10-08" for e in d["ledger"])
+    d = budget(
+        "plan", "--extra", "100", "--as-of", "2026-10-01", "--from", "+1m", "--select", "start"
+    )["data"]
+    assert d["start"] == "2026-11-01"
+    # stored dates stay absolute
+    err = budget(
+        "flow",
+        "add",
+        "--name",
+        "X",
+        "--kind",
+        "expense",
+        "--amount",
+        "1",
+        "--dtstart",
+        "tomorrow",
+        expect_ok=False,
+    )["error"]
+    assert err["code"] == "invalid_date"

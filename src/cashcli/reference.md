@@ -14,10 +14,20 @@ cash [--db PATH] [--pretty] COMMAND [ARGS]        # global flags may also follow
 - `--no-cleanup` — skip the automatic prior-month cleanup (see below).
 - `--select PATHS` — output only these comma-separated dotted paths of `data`, e.g.
   `--select spare_balance,spare.committed_total,series[-1].balance`. **Use this**: it keeps answers
-  small. `--compact` prints single-line JSON.
+  small. Paths are relative to `data` (a leading `data.` is forgiven). A path that does not resolve
+  fails with `select_not_found`, and the message names the deepest level that did resolve and lists
+  the keys actually there (or says the key needs `--verbose` / `--ledger`), so fix the path from the
+  error rather than re-running without `--select`. `--compact` prints single-line JSON.
 - `--verbose` — include bulky sections (`flows_used`, per-debt detail, the full scenario spec,
   lifestyle rows in the ledger). Off by default.
 - `CASHCLI_TODAY=YYYY-MM-DD` — override "today" (default as-of date and cleanup month).
+- **Dates on query flags** (`--as-of`, `--until`, `--from`, `--before`, `--on`, and `summary
+  --as-of`) may be `YYYY-MM-DD` or relative: `today`, `tomorrow`, `yesterday`, `eom` (end of
+  month), `eoy` (end of year), `+Nd` / `+Nw` / `+Nm` / `+Ny` (also `-N…`; months clamp, Jan 31
+  `+1m` → Feb 28). `today`/`tomorrow`/`yesterday` mean the real today; `eom`/`eoy`/`±N` count
+  from **as-of** (for `--as-of` itself, from today). So "from tomorrow for four weeks" is
+  `--as-of tomorrow --until +4w`. Stored data (`flow add --dtstart/--until`, `debt set
+  --balance-as-of`, `debt events add --date`) and scenario JSON take absolute dates only.
 - Envelope: `{"ok": true, "command": "...", "data": {...}, "warnings": [...]}` or
   `{"ok": false, "command": "...", "error": {"code": "...", "message": "..."}}`.
   Exit code 0 = ok, 1 = domain error (e.g. `unknown_flow`), 2 = usage error.
@@ -176,16 +186,22 @@ cash plan --extra A [--from D] [--strategy avalanche|snowball|order] [--order "A
           [--exclude FLOW]... [--no-rollover] [--starting-balance A] [--weekly-spend A]
           [--as-of D] [--until D | --months N (default 600)] [--scenario ... | shortcut flags]
 ```
-- `--as-of` defaults to today; `--months` defaults to 12 (breakeven: 120; schedule: 600).
-- **project** → `weekly_spend`, `lifestyle_total` (what the weekly spend added up to in the window),
+- `--as-of` defaults to today; `--months` defaults to 12 (breakeven: 120; schedule: 600). All of
+  these date flags accept the relative forms listed at the top (`--as-of tomorrow --until +4w`).
+- **project** → `as_of`, `until`, `starting_balance`, `weekly_spend`, `lifestyle_total` (what the
+  weekly spend added up to in the window),
   `ending_balance` (raw end-of-day cash on `until`), **`spare_balance`** (that
   balance minus the expenses due after `until` and before the next income; the default answer to
   "how much will I have"), `spare{next_income{date,name,amount}, committed_total,
   committed_before_next_income[{date,name,amount}]}`, `min_balance{date,balance}`, `max_balance`,
   `totals{income,expense,net,interest_paid,principal_paid}`, `series[{date,balance,income,expense,net}]`
   (monthly = as-of row + every month end + the until date; `income`/`expense` are the period since the
-  previous row; each row also carries its `spare` balance), `debts[{balance_at_as_of,balance_at_until,interest_accrued_in_window,paid_off_on}]`,
-  `flows_used[{occurrences,total}]`, `total_debt_at_until`, and `ledger[]` with `--ledger`.
+  previous row; each row also carries its `spare` balance), `debts[{flow,name,balance_at_until,paid_off_on}]`
+  (`balance_at_as_of`, `interest_accrued_in_window` with `--verbose`), `total_debt_at_until`,
+  `scenario` / `scenario_applied` (null / false unless a what-if was given), plus `flows_used[{occurrences,total}]`
+  only with `--verbose` and `ledger[]` (with a `ledger_note` when lifestyle rows were omitted) only
+  with `--ledger`. Without `--no-spare`, `spare_balance` and `spare` are present; `--no-spare` drops
+  them (cheaper when you only want `totals`).
   Balances are end-of-day. A debt whose balance date is before as-of is rolled forward silently
   (payments and interest between the two dates are applied, cash is not tracked before as-of).
 - **spend** answers "how much will I spend on X between now and DATE?": `cash spend car --until
@@ -320,6 +336,16 @@ weekly lifestyle budget, or use the one they usually quote)
 cash project --starting-balance 3000 --months 6 --weekly-spend 200
 # → data.spare_balance (money actually free to use: balance minus bills due before the next paycheck)
 #   data.ending_balance is the raw end-of-day balance; data.spare lists the bills that were deducted
+```
+
+**"What are my net cash flows from tomorrow through four weeks later, and what is my
+second-highest expense in that window?"**
+```
+cash project --as-of tomorrow --until +4w --starting-balance 0 --no-spare --select totals
+# → totals.income / totals.expense / totals.net for the window (lifestyle spend included)
+cash spend --as-of tomorrow --until +4w --select total,by_flow
+# → by_flow is every outflow, largest total first: by_flow[1] is the second-highest expense
+#   (add items to see each dated occurrence; --income for the money coming in)
 ```
 
 **"How much will I spend on car-related expenses between now and December 12?"**
